@@ -110,8 +110,16 @@ def load_vocab(vocab_path: str | Path) -> Dict[str, int]:
     return text_processing.load_vocab_dict_from_file(str(vocab_path))
 
 
+def tensor_from_array(array: np.ndarray, dtype: torch.dtype) -> torch.Tensor:
+    return torch.tensor(array.tolist(), dtype=dtype)
+
+
+def array_from_tensor(tensor: torch.Tensor, dtype: np.dtype | type = np.float32) -> np.ndarray:
+    return np.asarray(tensor.detach().cpu().tolist(), dtype=dtype)
+
+
 def normalize_image(image: np.ndarray) -> torch.Tensor:
-    tensor = torch.from_numpy(image.astype(np.float32) / 255.0).permute(2, 0, 1)
+    tensor = tensor_from_array(image.astype(np.float32) / 255.0, torch.float32).permute(2, 0, 1)
     mean = torch.tensor([0.485, 0.456, 0.406], dtype=torch.float32).view(3, 1, 1)
     std = torch.tensor([0.229, 0.224, 0.225], dtype=torch.float32).view(3, 1, 1)
     return (tensor - mean) / std
@@ -194,10 +202,10 @@ class NpzBatchDataset(Dataset):
             train_mask = resize_mask_to_input(mask, self.input_size)
 
         return {
-            "text": torch.from_numpy(text),
+            "text": tensor_from_array(text, torch.long),
             "image": normalize_image(model_image),
-            "train_mask": torch.from_numpy(train_mask).unsqueeze(0),
-            "gt_mask": torch.from_numpy((mask > 0.5).astype(np.float32)),
+            "train_mask": tensor_from_array(train_mask, torch.float32).unsqueeze(0),
+            "gt_mask": tensor_from_array((mask > 0.5).astype(np.float32), torch.float32),
             "sample_id": sample_id,
             "mask_relpath": mask_relpath,
             "sentence": sentence,

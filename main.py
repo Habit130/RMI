@@ -15,6 +15,7 @@ from tqdm import tqdm
 from build_batches import build_plantseg_batches
 from rmi_torch_model import RMIResNetModel
 from server_runtime import (
+    array_from_tensor,
     NpzBatchDataset,
     RunningMaskMetrics,
     copy_config_snapshot,
@@ -99,10 +100,10 @@ def evaluate(config: Dict, model: torch.nn.Module, device: torch.device, split: 
             image = batch["image"].to(device)
             text = batch["text"].to(device)
             logits = model(image, text).squeeze(1)
-            pred_raw = (torch.sigmoid(logits) >= threshold).cpu().numpy().astype(np.float32)
+            pred_raw = array_from_tensor((torch.sigmoid(logits) >= threshold).to(torch.float32), np.float32)
 
             for idx in range(pred_raw.shape[0]):
-                gt_mask = batch["gt_mask"][idx].numpy().astype(np.float32)
+                gt_mask = array_from_tensor(batch["gt_mask"][idx], np.float32)
                 pred_mask = resize_prediction_to_mask(pred_raw[idx], gt_mask.shape)
                 metrics.update(pred_mask, gt_mask)
                 if mask_dir:
