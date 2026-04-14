@@ -8,5 +8,11 @@ Gref/*
 unc/*
 unc+/*
 referit/*
+plantseg/*
+outputs/
+__pycache__/
+*.pt
+*.pth
+*.py[cod]
 
 *.pyc

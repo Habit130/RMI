@@ -1,126 +1,96 @@
-import sys
-sys.path.append('./external/coco/PythonAPI')
-import os
+from __future__ import annotations
+
 import argparse
+import shutil
+from pathlib import Path
+from typing import Dict, List
+
 import numpy as np
-import json
-import skimage
+from PIL import Image
 
-from util import im_processing, text_processing
-from util.io import load_referit_gt_mask as load_gt_mask
-from refer import REFER
-from pycocotools import mask as cocomask
-
-
-def build_referit_batches(setname, T, input_H, input_W):
-    # data directory
-    im_dir = './data/referit/images/'
-    mask_dir = './data/referit/mask/'
-    query_file = './data/referit/referit_query_' + setname + '.json'
-    vocab_file = './data/vocabulary_referit.txt'
-
-    # saving directory
-    data_folder = './referit/' + setname + '_batch/'
-    data_prefix = 'referit_' + setname
-    if not os.path.isdir(data_folder):
-        os.makedirs(data_folder)
-
-    # load annotations
-    query_dict = json.load(open(query_file))
-    im_list = query_dict.keys()
-    vocab_dict = text_processing.load_vocab_dict_from_file(vocab_file)
-
-    # collect training samples
-    samples = []
-    for n_im, name in enumerate(im_list):
-        im_name = name.split('_', 1)[0] + '.jpg'
-        mask_name = name + '.mat'
-        for sent in query_dict[name]:
-            samples.append((im_name, mask_name, sent))
-
-    # save batches to disk
-    num_batch = len(samples)
-    for n_batch in range(num_batch):
-        print('saving batch %d / %d' % (n_batch + 1, num_batch))
-        im_name, mask_name, sent = samples[n_batch]
-        im = skimage.io.imread(im_dir + im_name)
-        mask = load_gt_mask(mask_dir + mask_name).astype(np.float32)
-
-        if 'train' in setname:
-            im = skimage.img_as_ubyte(im_processing.resize_and_pad(im, input_H, input_W))
-            mask = im_processing.resize_and_pad(mask, input_H, input_W)
-        if im.ndim == 2:
-            im = np.tile(im[:, :, np.newaxis], (1, 1, 3))
-
-        text = text_processing.preprocess_sentence(sent, vocab_dict, T)
-
-        np.savez(file = data_folder + data_prefix + '_' + str(n_batch) + '.npz',
-            text_batch = text,
-            im_batch = im,
-            mask_batch = (mask > 0),
-            sent_batch = [sent])
+from server_runtime import (
+    build_vocab,
+    ensure_output_dirs,
+    load_config,
+    load_manifest,
+    resize_image_to_input,
+    resize_mask_to_input,
+    save_metrics,
+    split_records,
+)
+from util import text_processing
 
 
-def build_coco_batches(dataset, setname, T, input_H, input_W):
-    im_dir = './data/coco/images'
-    im_type = 'train2014'
-    vocab_file = './data/vocabulary_Gref.txt'
+def _load_rgb_image(path: Path) -> np.ndarray:
+    return np.asarray(Image.open(path).convert("RGB"))
 
-    data_folder = './' + dataset + '/' + setname + '_batch/'
-    data_prefix = dataset + '_' + setname
-    if not os.path.isdir(data_folder):
-        os.makedirs(data_folder)
 
-    if dataset == 'Gref':
-        refer = REFER('./external/refer/data', dataset = 'refcocog', splitBy = 'google')
-    elif dataset == 'unc':
-        refer = REFER('./external/refer/data', dataset = 'refcoco', splitBy = 'unc')
-    elif dataset == 'unc+':
-        refer = REFER('./external/refer/data', dataset = 'refcoco+', splitBy = 'unc')
-    else:
-        raise ValueError('Unknown dataset %s' % dataset)
-    refs = [refer.Refs[ref_id] for ref_id in refer.Refs if refer.Refs[ref_id]['split'] == setname]
-    vocab_dict = text_processing.load_vocab_dict_from_file(vocab_file)
+def _load_binary_mask(path: Path) -> np.ndarray:
+    return (np.asarray(Image.open(path).convert("L")) > 127).astype(np.float32)
 
-    n_batch = 0
-    for ref in refs:
-        im_name = 'COCO_' + im_type + '_' + str(ref['image_id']).zfill(12)
-        im = skimage.io.imread('%s/%s/%s.jpg' % (im_dir, im_type, im_name))
-        seg = refer.Anns[ref['ann_id']]['segmentation']
-        rle = cocomask.frPyObjects(seg, im.shape[0], im.shape[1])
-        mask = np.max(cocomask.decode(rle), axis = 2).astype(np.float32)
 
-        if 'train' in setname:
-            im = skimage.img_as_ubyte(im_processing.resize_and_pad(im, input_H, input_W))
-            mask = im_processing.resize_and_pad(mask, input_H, input_W)
-        if im.ndim == 2:
-            im = np.tile(im[:, :, np.newaxis], (1, 1, 3))
+def _save_split_batches(config: Dict, records: List[Dict], split_name: str, vocab_dict: Dict[str, int]) -> int:
+    dataset_root = Path(config["dataset"]["root"])
+    caption_index = int(config["dataset"]["caption_index"])
+    input_size = int(config["model"]["input_size"])
+    num_steps = int(config["model"]["num_steps"])
+    split_dir = Path(config["dataset"]["batch_dir"]) / f"{split_name}_batch"
+    if split_dir.exists():
+        shutil.rmtree(split_dir)
+    split_dir.mkdir(parents=True, exist_ok=True)
 
-        for sentence in ref['sentences']:
-            print('saving batch %d' % (n_batch + 1))
-            sent = sentence['sent']
-            text = text_processing.preprocess_sentence(sent, vocab_dict, T)
+    for index, record in enumerate(records):
+        image = _load_rgb_image(dataset_root / record["image"])
+        mask = _load_binary_mask(dataset_root / record["mask"])
+        sentence = record["caption"][caption_index]
+        text = text_processing.preprocess_sentence(sentence, vocab_dict, num_steps)
 
-            np.savez(file = data_folder + data_prefix + '_' + str(n_batch) + '.npz',
-                text_batch = text,
-                im_batch = im,
-                mask_batch = (mask > 0),
-                sent_batch = [sent])
-            n_batch += 1
+        if split_name == "train":
+            image_to_save = resize_image_to_input(image, input_size)
+            mask_to_save = resize_mask_to_input(mask, input_size)
+        else:
+            image_to_save = image
+            mask_to_save = mask.astype(np.float32)
+
+        np.savez(
+            split_dir / f"plantseg_{split_name}_{index}.npz",
+            text_batch=np.asarray(text, dtype=np.int64),
+            im_batch=image_to_save,
+            mask_batch=mask_to_save.astype(np.float32),
+            sent_batch=np.asarray([sentence]),
+            sample_id=np.asarray(record["id"]),
+            mask_relpath=np.asarray(record["mask"]),
+        )
+    return len(records)
+
+
+def build_plantseg_batches(config: Dict) -> Dict[str, int]:
+    ensure_output_dirs(config)
+    records = load_manifest(config)
+    split_map = split_records(records)
+    vocab_dict = build_vocab(split_map["train"], int(config["dataset"]["caption_index"]), config["dataset"]["vocab_path"])
+
+    counts = {}
+    for split_name in ("train", "val", "test"):
+        counts[split_name] = _save_split_batches(config, split_map[split_name], split_name, vocab_dict)
+
+    save_metrics(counts, Path(config["outputs"]["metrics_dir"]) / "batch_manifest.json")
+    return counts
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Build plantseg batch files for RMI training.")
+    parser.add_argument("--config", default="configs/plantseg_rmi_resnet.yaml")
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    config = load_config(args.config)
+    counts = build_plantseg_batches(config)
+    for split_name, count in counts.items():
+        print(f"{split_name}: {count} batches")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument('-d', type = str, default = 'referit') # 'unc', 'unc+', 'Gref'
-    parser.add_argument('-t', type = str, default = 'trainval') # 'test', val', 'testA', 'testB'
-
-    args = parser.parse_args()
-    T = 20
-    input_H = 320
-    input_W = 320
-    if args.d == 'referit':
-        build_referit_batches(setname = args.t, 
-            T = T, input_H = input_H, input_W = input_W)
-    else:
-        build_coco_batches(dataset = args.d, setname = args.t,
-            T = T, input_H = input_H, input_W = input_W)
+    main()
