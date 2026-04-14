@@ -20,7 +20,7 @@ model:
   backbone_weights: IMAGENET1K_V2
 
 training:
-  batch_size: 1
+  batch_size: 4
   epochs: 50
   learning_rate: 0.00025
   min_learning_rate: 0.00001
