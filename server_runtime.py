@@ -213,6 +213,19 @@ class NpzBatchDataset(Dataset):
         }
 
 
+def collate_batch(samples: List[Dict]) -> Dict:
+    return {
+        "text": torch.stack([sample["text"] for sample in samples], dim=0),
+        "image": torch.stack([sample["image"] for sample in samples], dim=0),
+        "train_mask": torch.stack([sample["train_mask"] for sample in samples], dim=0),
+        "gt_mask": [sample["gt_mask"] for sample in samples],
+        "sample_id": [sample["sample_id"] for sample in samples],
+        "mask_relpath": [sample["mask_relpath"] for sample in samples],
+        "sentence": [sample["sentence"] for sample in samples],
+        "orig_size": [sample["orig_size"] for sample in samples],
+    }
+
+
 class RunningMaskMetrics:
     def __init__(self) -> None:
         self.tp = 0

@@ -16,6 +16,7 @@ from build_batches import build_plantseg_batches
 from rmi_torch_model import RMIResNetModel
 from server_runtime import (
     array_from_tensor,
+    collate_batch,
     NpzBatchDataset,
     RunningMaskMetrics,
     copy_config_snapshot,
@@ -52,6 +53,7 @@ def make_loader(config: Dict, split: str, shuffle: bool) -> DataLoader:
         batch_size=int(config["training"]["batch_size"]),
         shuffle=shuffle,
         num_workers=int(config["training"]["num_workers"]),
+        collate_fn=collate_batch,
     )
 
 
